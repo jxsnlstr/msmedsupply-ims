@@ -1,13 +1,14 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import LogoUrl from "../assets/medsupply.png";
 import ClearFilterIcon from "../assets/Clear Filter.png";
-import FilterModal from "../components/common/FilterModal";
+import CenteredToast from "../components/common/CenteredToast";
+import AddProductModal from "../components/products/AddProductModal";
 import EditProductModal from "../components/common/EditProductModal";
-import InventoryMetricGrid from "../components/inventory/InventoryMetricGrid";
-import InventoryTable from "../components/inventory/InventoryTable";
-import InventoryAddProductModal from "../components/inventory/InventoryAddProductModal";
+import FilterModal from "../components/common/FilterModal";
+import ProductMetricGrid from "../components/products/ProductMetricGrid";
+import ProductTable from "../components/products/ProductTable";
 
-export default function Inventory() {
+export default function Products() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [showFilterModal, setShowFilterModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -22,6 +23,10 @@ export default function Inventory() {
     expiry: "",
     availability: "",
   });
+
+  const updateNewProductField = (field, value) => {
+    setNewProduct((prev) => ({ ...prev, [field]: value }));
+  };
 
   const updateFilterField = (field, value) => {
     setFilters((prev) => ({ ...prev, [field]: value }));
@@ -54,51 +59,6 @@ export default function Inventory() {
     } catch {}
   }, [products]);
 
-  // Map to hold per-entry metadata for Inventory view (batch/user/entry date)
-  const [entryMap, setEntryMap] = useState(() => {
-    try {
-      const saved = localStorage.getItem("inventory_entry_map");
-      if (saved) return JSON.parse(saved);
-    } catch {}
-    const map = {};
-    (Array.isArray(products) ? products : []).forEach((p) => {
-      const key = `${p.id}::${p.name}`;
-      map[key] = {
-        batch:
-          `BATCH-${String(p.id || "").replace(/[^A-Za-z0-9]/g, "").slice(-6) || "000000"}`,
-        user: "System",
-        entryAt: new Date().toISOString(),
-      };
-    });
-    return map;
-  });
-
-  // Persist entry map
-  useEffect(() => {
-    try {
-      localStorage.setItem("inventory_entry_map", JSON.stringify(entryMap));
-    } catch {}
-  }, [entryMap]);
-
-  // Ensure all products have an entry in the map
-  useEffect(() => {
-    setEntryMap((prev) => {
-      const next = { ...prev };
-      (Array.isArray(products) ? products : []).forEach((p) => {
-        const key = `${p.id}::${p.name}`;
-        if (!next[key]) {
-          next[key] = {
-            batch:
-              `BATCH-${String(p.id || "").replace(/[^A-Za-z0-9]/g, "").slice(-6) || "000000"}`,
-            user: "System",
-            entryAt: new Date().toISOString(),
-          };
-        }
-      });
-      return next;
-    });
-  }, [products]);
-
   const [newProduct, setNewProduct] = useState({
     name: "",
     id: "",
@@ -112,15 +72,20 @@ export default function Inventory() {
     image: null,
   });
 
-  const [showSuggestions, setShowSuggestions] = useState(false);
+  // no autofill suggestions for Add Product (new items only)
+  const [addedToast, setAddedToast] = useState(false);
+  const toastTimerRef = useRef(null);
+  const [errorToast, setErrorToast] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
+  const errorTimerRef = useRef(null);
 
-  const updateNewProductField = (field, value) => {
-    setNewProduct((prev) => ({ ...prev, [field]: value }));
-  };
-
-  const handleNameInput = (value) => {
-    setNewProduct((prev) => ({ ...prev, name: value }));
-    setShowSuggestions(true);
+  const showError = (msg) => {
+    try {
+      if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
+    } catch {}
+    setErrorMsg(msg || "Please fix the highlighted fields.");
+    setErrorToast(true);
+    errorTimerRef.current = setTimeout(() => setErrorToast(false), 2000);
   };
 
   // Image upload
@@ -131,49 +96,50 @@ export default function Inventory() {
     }
   };
 
-  // Add or merge product
+  // Add product (must be new; duplicates are not allowed)
   const handleAddProduct = () => {
-    if (!newProduct.name || !newProduct.id || !newProduct.price || !newProduct.quantity) {
-      alert("Please fill in all required fields.");
-      return;
-    }
+    if (!newProduct.name) return showError("Enter product name.");
+    if (!newProduct.id) return showError("Enter product ID.");
+    if (newProduct.price === "" || newProduct.price === null) return showError("Enter buying price.");
+    const priceNum = Number(newProduct.price);
+    if (!Number.isFinite(priceNum) || priceNum < 0) return showError("Enter a valid price.");
+    const qtyNum = (newProduct.quantity === "" || newProduct.quantity === null)
+      ? 0
+      : Number(newProduct.quantity);
+    if (!Number.isFinite(qtyNum) || qtyNum < 0) return showError("Enter a valid quantity (0 or more).");
 
-    const existing = products.find(
-      (p) => p.name.toLowerCase() === newProduct.name.toLowerCase()
+    const existsByName = products.some(
+      (p) => (p.name || "").toLowerCase() === newProduct.name.toLowerCase()
     );
-
-    if (existing) {
-      const updated = products.map((p) => {
-        if (p.name.toLowerCase() === newProduct.name.toLowerCase()) {
-          const newQty = parseInt(p.quantity) + parseInt(newProduct.quantity);
-          const updatedAvailability =
-            newQty <= 0 ? "Out of Stock" : newQty < 10 ? "Low Stock" : "In Stock";
-          return { ...p, quantity: newQty, availability: updatedAvailability };
-        }
-        return p;
-      });
-      setProducts(updated);
-    } else {
-      const newItem = {
-        id: newProduct.id,
-        name: newProduct.name,
-        category: newProduct.category || "Uncategorized",
-        price: parseFloat(newProduct.price),
-        quantity: parseInt(newProduct.quantity),
-        threshold: `${newProduct.threshold || 0} ${newProduct.unit || ""}`.trim(),
-        location: newProduct.location || "",
-        expiry: newProduct.expiry,
-        availability:
-          parseInt(newProduct.quantity) <= 0
-            ? "Out of Stock"
-            : parseInt(newProduct.quantity) < 10
-            ? "Low Stock"
-            : "In Stock",
-      };
-      setProducts((prev) => [...prev, newItem]);
+    const existsById = products.some((p) => (p.id || "") === newProduct.id);
+    if (existsByName || existsById) {
+      return showError("Product already exists. Use Update instead.");
     }
+
+    const newItem = {
+      id: newProduct.id,
+      name: newProduct.name,
+      category: newProduct.category || "Uncategorized",
+      price: priceNum,
+      quantity: qtyNum,
+      threshold: `${newProduct.threshold || 0} ${newProduct.unit || ""}`.trim(),
+      location: newProduct.location || "",
+      expiry: newProduct.expiry,
+      availability: (() => {
+        const tVal = Number((parseThreshold(`${newProduct.threshold || 0} ${newProduct.unit || ""}`) || {}).value || 0);
+        if (qtyNum <= 0) return "Out of Stock";
+        if (qtyNum < tVal) return "Low Stock";
+        return "In Stock";
+      })(),
+    };
+    setProducts((prev) => [...prev, newItem]);
 
     setShowAddModal(false);
+    try {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    } catch {}
+    setAddedToast(true);
+    toastTimerRef.current = setTimeout(() => setAddedToast(false), 2000);
     setNewProduct({
       name: "",
       id: "",
@@ -214,25 +180,29 @@ export default function Inventory() {
   };
 
   const handleUpdateProduct = () => {
-    if (!newProduct.name || !newProduct.id || !newProduct.price || !newProduct.quantity) {
-      alert("Please fill in all required fields.");
-      return;
-    }
+    if (!newProduct.name) return showError("Enter product name.");
+    if (!newProduct.id) return showError("Enter product ID.");
+    if (newProduct.price === "" || newProduct.price === null) return showError("Enter buying price.");
+    if (newProduct.quantity === "" || newProduct.quantity === null) return showError("Enter quantity.");
+    const priceNum = Number(newProduct.price);
+    const qtyNum = Number(newProduct.quantity);
+    if (!Number.isFinite(priceNum) || priceNum < 0) return showError("Enter a valid price.");
+    if (!Number.isFinite(qtyNum) || qtyNum <= 0) return showError("Enter a valid quantity.");
     const updatedItem = {
       id: newProduct.id,
       name: newProduct.name,
       category: newProduct.category || "Uncategorized",
-      price: parseFloat(newProduct.price),
-      quantity: parseInt(newProduct.quantity),
+      price: priceNum,
+      quantity: qtyNum,
       threshold: `${newProduct.threshold || 0} ${newProduct.unit || ""}`.trim(),
       location: newProduct.location || "",
       expiry: newProduct.expiry,
-      availability:
-        parseInt(newProduct.quantity) <= 0
-          ? "Out of Stock"
-          : parseInt(newProduct.quantity) < 10
-          ? "Low Stock"
-          : "In Stock",
+      availability: (() => {
+        const tVal = Number((parseThreshold(`${newProduct.threshold || 0} ${newProduct.unit || ""}`) || {}).value || 0);
+        if (qtyNum <= 0) return "Out of Stock";
+        if (qtyNum < tVal) return "Low Stock";
+        return "In Stock";
+      })(),
     };
     if (applyToAll && editNameKey) {
       setProducts((prev) =>
@@ -276,14 +246,9 @@ export default function Inventory() {
     });
   };
 
-  // Auto-fill from existing product on suggestion click
-  const handleSelectSuggestion = (product) => {
-    setNewProduct({
-      ...product,
-      expiry: "", // always set manually
-      image: null,
-    });
-    setShowSuggestions(false);
+  const handleEditClick = (item) => {
+    const index = products.findIndex((p) => p.id === item.id && p.name === item.name);
+    if (index >= 0) openEditModal(index);
   };
 
   const clearFilters = () =>
@@ -295,6 +260,10 @@ export default function Inventory() {
       expiry: "",
       availability: "",
     });
+
+  const handleFilterApply = () => setShowFilterModal(false);
+
+  // No autofill for Add Product (new items only)
 
   // Filtering
   let filteredProducts = products.filter((p) => {
@@ -309,9 +278,7 @@ export default function Inventory() {
   if (filters.quantitySort === "lowToHigh") filteredProducts.sort((a, b) => a.quantity - b.quantity);
   if (filters.quantitySort === "highToLow") filteredProducts.sort((a, b) => b.quantity - a.quantity);
 
-  const productSuggestions = products.filter((p) =>
-    p.name.toLowerCase().includes(newProduct.name.toLowerCase())
-  );
+  // suggestions removed
 
   const isFilterApplied = useMemo(() => {
     return Boolean(
@@ -323,6 +290,21 @@ export default function Inventory() {
       filters.expiry
     );
   }, [filters]);
+
+  const parseThreshold = (t) => {
+    const parts = String(t || "").trim().split(" ");
+    const value = parts.shift() || "";
+    const unit = parts.join(" ") || "";
+    return { value, unit };
+  };
+
+  const computeAvailability = (qty, thresholdStr) => {
+    const q = Number(qty || 0);
+    const tVal = Number((parseThreshold(thresholdStr || "") || {}).value || 0);
+    if (q <= 0) return "Out of Stock";
+    if (q < tVal) return "Low Stock";
+    return "In Stock";
+  };
 
   // Helper: load external script if not already present
   const loadScript = (src) =>
@@ -396,39 +378,33 @@ export default function Inventory() {
       }
       doc.setFontSize(18);
       doc.setTextColor(33, 37, 41);
-      doc.text("Inventory Report", 180, 50);
+      doc.text("Products Report", 180, 50);
       doc.setFontSize(10);
       doc.setTextColor(100);
       doc.text(new Date().toLocaleString(), 180, 68);
 
       // Table data from current view (respects filters)
-      const rows = (filteredProducts || []).map((p) => {
-        const key = `${p.id}::${p.name}`;
-        const meta = (entryMap && entryMap[key]) || {};
-        const entryDate = meta.entryAt ? new Date(meta.entryAt) : new Date();
-        const tilDays = Math.max(0, Math.floor((Date.now() - entryDate.getTime()) / (1000 * 60 * 60 * 24)));
-        return [
-          p.id,
-          p.name,
-          meta.batch || "",
-          String(p.quantity ?? ""),
-          p.location || "",
-          meta.user || "",
-          `${tilDays} days`,
-          entryDate.toLocaleString(),
-        ];
-      });
+      const rows = (filteredProducts || []).map((p) => [
+        p.id,
+        p.name,
+        p.category,
+        `$${Number(p.price).toFixed(2)}`,
+        String(p.quantity),
+        p.location || "",
+        p.expiry || "",
+        p.availability || "",
+      ]);
 
       doc.autoTable({
         head: [[
           "Product ID",
           "Product Name",
-          "Batch",
+          "Category",
+          "Buying Price",
           "Quantity",
           "Location",
-          "User",
-          "Til",
-          "Entry Date/Time",
+          "Expiry Date",
+          "Availability",
         ]],
         body: rows,
         startY: 90,
@@ -446,7 +422,7 @@ export default function Inventory() {
         },
       });
 
-      const fileName = `Inventory_${new Date().toISOString().slice(0, 10)}.pdf`;
+      const fileName = `Products_${new Date().toISOString().slice(0, 10)}.pdf`;
       doc.save(fileName);
     } catch (err) {
       console.error(err);
@@ -454,30 +430,27 @@ export default function Inventory() {
     }
   };
 
-  const handleFilterApply = () => setShowFilterModal(false);
-
   return (
     <div className="space-y-6">
-      <InventoryMetricGrid totalProducts={products.length} />
+      <ProductMetricGrid totalProducts={products.length} />
 
-      <InventoryTable
+      <ProductTable
         filteredProducts={filteredProducts}
-        entryMap={entryMap}
+        onAddClick={() => setShowAddModal(true)}
         onFilterClick={() => setShowFilterModal(true)}
-        isFilterApplied={isFilterApplied}
         onClearFilters={clearFilters}
+        isFilterApplied={isFilterApplied}
         onDownload={handleDownloadPdf}
         clearFilterIcon={ClearFilterIcon}
+        computeAvailability={computeAvailability}
+        parseThreshold={parseThreshold}
+        onEdit={handleEditClick}
       />
 
-      <InventoryAddProductModal
+      <AddProductModal
         open={showAddModal}
         product={newProduct}
         onFieldChange={updateNewProductField}
-        onNameInput={handleNameInput}
-        suggestions={productSuggestions}
-        showSuggestions={showSuggestions}
-        onSelectSuggestion={handleSelectSuggestion}
         onClose={() => setShowAddModal(false)}
         onSubmit={handleAddProduct}
         onImageUpload={handleImageUpload}
@@ -500,6 +473,22 @@ export default function Inventory() {
         applyToAll={applyToAll}
         onToggleApplyToAll={setApplyToAll}
         applyLabelKey={editNameKey}
+      />
+
+      <CenteredToast
+        open={addedToast}
+        variant="success"
+        title="Added Product"
+        message="Product successfully added."
+        onClose={() => setAddedToast(false)}
+      />
+
+      <CenteredToast
+        open={errorToast}
+        variant="error"
+        title="Error"
+        message={errorMsg}
+        onClose={() => setErrorToast(false)}
       />
     </div>
   );
