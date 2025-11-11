@@ -4,10 +4,16 @@ import medsupplyLogo from "../assets/medsupply.png"; // your logo in src/assets
 export default function Login({ onLogin }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    onLogin(username, password);
+    const didLogin = onLogin(username, password);
+    if (!didLogin) {
+      setError("Invalid username or password.");
+      return;
+    }
+    setError("");
   };
 
   return (
@@ -72,6 +78,12 @@ export default function Login({ onLogin }) {
           >
             Log In
           </button>
+
+          {error && (
+            <p className="text-sm text-red-600 text-center" role="alert">
+              {error}
+            </p>
+          )}
         </form>
 
         <p className="text-gray-600 text-xs text-center mt-6">

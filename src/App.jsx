@@ -19,6 +19,9 @@ import Login from "./pages/Login.jsx";
 import "./index.css";
 import { ThemeProvider, useTheme } from "./context/ThemeContext.jsx";
 
+const VALID_USERNAME = "jlaster";
+const VALID_PASSWORD = "medsupply";
+
 export default function App() {
   return (
     <ThemeProvider>
@@ -32,7 +35,18 @@ function AppContent() {
   const { resolvedTheme } = useTheme();
 
   const handleLogin = (username, password) => {
-    if (username && password) setIsLoggedIn(true);
+    const normalizedUsername = (username ?? "").trim().toLowerCase();
+    const normalizedPassword = password ?? "";
+
+    const credentialsMatch =
+      normalizedUsername === VALID_USERNAME && normalizedPassword === VALID_PASSWORD;
+
+    if (credentialsMatch) {
+      setIsLoggedIn(true);
+      return true;
+    }
+
+    return false;
   };
 
   const handleLogout = () => setIsLoggedIn(false);
