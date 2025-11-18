@@ -124,14 +124,5 @@ function persistAuthUser(user: AuthUser | null) {
 }
 
 function loadAuthUser(): AuthUser | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const stored = window.localStorage.getItem(AUTH_STORAGE_KEY);
-    if (stored) {
-      return JSON.parse(stored) as AuthUser;
-    }
-  } catch {
-    // ignore parse errors
-  }
   return null;
 }
