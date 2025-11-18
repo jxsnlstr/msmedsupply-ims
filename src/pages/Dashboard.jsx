@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   ResponsiveContainer,
   BarChart,
@@ -10,6 +10,7 @@ import {
   LineChart,
   Line,
 } from "recharts";
+import { getStockByLocation } from "../api/imsApi";
 
 // helper for mock data
 const rand = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
@@ -19,13 +20,22 @@ export default function Dashboard() {
   const timeOptions = ["Weekly", "Monthly", "Quarterly", "Yearly"];
 
   // Pull inventory snapshot for KPIs
-  const inventory = useMemo(() => {
-    try {
-      const raw = localStorage.getItem("inventory_products");
-      return raw ? JSON.parse(raw) : [];
-    } catch {
-      return [];
-    }
+  const [inventory, setInventory] = useState([]);
+
+  useEffect(() => {
+    let isMounted = true;
+    (async () => {
+      try {
+        const data = await getStockByLocation();
+        if (isMounted) setInventory(data);
+      } catch (error) {
+        console.error("Failed to load inventory snapshot", error);
+        if (isMounted) setInventory([]);
+      }
+    })();
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const invMetrics = useMemo(() => {

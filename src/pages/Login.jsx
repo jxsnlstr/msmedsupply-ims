@@ -5,15 +5,22 @@ export default function Login({ onLogin }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    const didLogin = onLogin(username, password);
-    if (!didLogin) {
-      setError("Invalid username or password.");
-      return;
-    }
     setError("");
+    setIsSubmitting(true);
+    try {
+      const didLogin = await onLogin?.(username, password);
+      if (!didLogin) {
+        setError("Invalid username or password.");
+      }
+    } catch (err) {
+      setError(err?.message || "Unable to sign in.");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -74,9 +81,10 @@ export default function Login({ onLogin }) {
 
           <button
             type="submit"
-            className="w-full bg-[#007BBD] hover:bg-[#0068A3] text-white py-2 rounded-lg font-semibold transition-all shadow-md"
+            disabled={isSubmitting}
+            className="w-full bg-[#007BBD] hover:bg-[#0068A3] text-white py-2 rounded-lg font-semibold transition-all shadow-md disabled:opacity-60 disabled:cursor-not-allowed"
           >
-            Log In
+            {isSubmitting ? "Signing In..." : "Log In"}
           </button>
 
           {error && (

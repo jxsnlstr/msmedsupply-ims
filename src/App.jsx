@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 
 // Components
@@ -18,9 +18,7 @@ import Login from "./pages/Login.jsx";
 
 import "./index.css";
 import { ThemeProvider, useTheme } from "./context/ThemeContext.jsx";
-
-const VALID_USERNAME = "jlaster";
-const VALID_PASSWORD = "medsupply";
+import { getCurrentUser, onAuthStateChange, signIn, signOut } from "./api/authApi";
 
 export default function App() {
   return (
@@ -31,27 +29,24 @@ export default function App() {
 }
 
 function AppContent() {
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [currentUser, setCurrentUser] = useState(() => getCurrentUser());
   const { resolvedTheme } = useTheme();
 
-  const handleLogin = (username, password) => {
-    const normalizedUsername = (username ?? "").trim().toLowerCase();
-    const normalizedPassword = password ?? "";
+  useEffect(() => {
+    const unsubscribe = onAuthStateChange(setCurrentUser);
+    return unsubscribe;
+  }, []);
 
-    const credentialsMatch =
-      normalizedUsername === VALID_USERNAME && normalizedPassword === VALID_PASSWORD;
-
-    if (credentialsMatch) {
-      setIsLoggedIn(true);
-      return true;
-    }
-
-    return false;
+  const handleLogin = async (identifier, password) => {
+    await signIn(identifier, password);
+    return true;
   };
 
-  const handleLogout = () => setIsLoggedIn(false);
+  const handleLogout = async () => {
+    await signOut();
+  };
 
-  if (!isLoggedIn) {
+  if (!currentUser) {
     return <Login onLogin={handleLogin} />;
   }
 
@@ -62,7 +57,7 @@ function AppContent() {
 
       {/* Main Content */}
       <main className="flex-1 ml-[240px] min-h-screen overflow-y-auto bg-[#F8F9FB] text-gray-900 dark:bg-gray-900 dark:text-gray-100 transition-colors duration-200 ease-out">
-        <Topbar />
+        <Topbar currentUser={currentUser} />
         <div className="p-6">
           <Routes>
             <Route path="/" element={<Dashboard />} />

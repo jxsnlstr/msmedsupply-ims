@@ -1,153 +1,10 @@
-﻿import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import CenteredToast from "../components/common/CenteredToast";
 import MaterialListPanel from "../components/materials/MaterialListPanel";
 import MaterialMasterForm from "../components/materials/MaterialMasterForm";
+import { createMaterialDraft, getMaterials, upsertMaterial } from "../api/imsApi";
 
-
-const STORAGE_KEY = "material_master_records";
 const STATUS_OPTIONS = ["Active", "QA Hold", "Blocked", "To Be Extended"];
-
-const MATERIAL_TEMPLATE = {
-  materialNumber: "",
-  description: "",
-  materialGroup: "",
-  manufacturer: "",
-  baseUnit: "EA",
-  storageLocation: "",
-  storageBin: "",
-  quantityOnHand: "",
-  reorderPoint: "",
-  reorderQuantity: "",
-  procurementType: "External",
-  supplier: "",
-  standardCost: "",
-  currency: "USD",
-  lastReceivedDate: "",
-  lastIssuedDate: "",
-  status: "Active",
-  notes: "",
-  createdBy: "Materials",
-  createdOn: "",
-  lastReviewed: "",
-};
-
-const DEFAULT_MATERIALS = [
-  {
-    materialNumber: "MAT-0001",
-    description: "Sterile Saline 0.9% 500mL",
-    materialGroup: "IV Solutions",
-    manufacturer: "Baxter",
-    baseUnit: "EA",
-    storageLocation: "INF-01",
-    storageBin: "A2-14",
-    quantityOnHand: "540",
-    reorderPoint: "360",
-    reorderQuantity: "180",
-    procurementType: "External",
-    supplier: "Baxter Healthcare",
-    standardCost: "3.75",
-    currency: "USD",
-    lastReceivedDate: "2025-02-01",
-    lastIssuedDate: "2025-02-12",
-    status: "Active",
-    notes: "Primary infusion therapy solution.",
-    createdBy: "J. Laster",
-    createdOn: "2024-07-12T10:00:00.000Z",
-    lastReviewed: "2025-02-15",
-  },
-  {
-    materialNumber: "MAT-0002",
-    description: "Nitrile Surgical Gloves Size M",
-    materialGroup: "Surgical Supplies",
-    manufacturer: "ChemPro",
-    baseUnit: "BOX",
-    storageLocation: "SUR-01",
-    storageBin: "B3-08",
-    quantityOnHand: "220",
-    reorderPoint: "150",
-    reorderQuantity: "100",
-    procurementType: "External",
-    supplier: "Cardinal Health",
-    standardCost: "14.25",
-    currency: "USD",
-    lastReceivedDate: "2025-01-29",
-    lastIssuedDate: "2025-02-10",
-    status: "Active",
-    notes: "Lot traceability maintained through QA module.",
-    createdBy: "Materials",
-    createdOn: "2024-03-02T09:15:00.000Z",
-    lastReviewed: "2025-01-18",
-  },
-  {
-    materialNumber: "MAT-0003",
-    description: "Oncology Cold Chain Kit",
-    materialGroup: "Cold Chain",
-    manufacturer: "CryoMedics",
-    baseUnit: "SET",
-    storageLocation: "CC-01",
-    storageBin: "C1-02",
-    quantityOnHand: "18",
-    reorderPoint: "24",
-    reorderQuantity: "12",
-    procurementType: "External",
-    supplier: "CryoMedics",
-    standardCost: "120.00",
-    currency: "USD",
-    lastReceivedDate: "2025-01-05",
-    lastIssuedDate: "",
-    status: "QA Hold",
-    notes: "Pending updated stability data before release.",
-    createdBy: "Regulatory",
-    createdOn: "2024-09-22T14:45:00.000Z",
-    lastReviewed: "2025-03-04",
-  },
-  {
-    materialNumber: "MAT-0004",
-    description: "Controlled Substance Transport Pack",
-    materialGroup: "Controlled Substances",
-    manufacturer: "MS Assembly",
-    baseUnit: "SET",
-    storageLocation: "CS-01",
-    storageBin: "Secure-03",
-    quantityOnHand: "4",
-    reorderPoint: "6",
-    reorderQuantity: "4",
-    procurementType: "In-House",
-    supplier: "MS Assembly",
-    standardCost: "85.00",
-    currency: "USD",
-    lastReceivedDate: "2024-12-04",
-    lastIssuedDate: "2025-01-18",
-    status: "Blocked",
-    notes: "Distribution paused pending DEA update.",
-    createdBy: "Security",
-    createdOn: "2023-11-05T08:00:00.000Z",
-    lastReviewed: "2025-02-11",
-  },
-  {
-    materialNumber: "MAT-0005",
-    description: "Community Clinic Starter Kit",
-    materialGroup: "Kits",
-    manufacturer: "MedGlobal",
-    baseUnit: "SET",
-    storageLocation: "KIT-01",
-    storageBin: "D4-06",
-    quantityOnHand: "10",
-    reorderPoint: "20",
-    reorderQuantity: "10",
-    procurementType: "Subcontracting",
-    supplier: "MedGlobal",
-    standardCost: "240.00",
-    currency: "USD",
-    lastReceivedDate: "2025-02-06",
-    lastIssuedDate: "",
-    status: "To Be Extended",
-    notes: "Awaiting plant extension for MS01 and MS02.",
-    createdBy: "Programs",
-    createdOn: "2025-01-12T12:05:00.000Z",
-    lastReviewed: "2025-02-20",
-  },
-];
 
 const STATUS_FILTERS = ["All", ...STATUS_OPTIONS];
 
@@ -174,30 +31,50 @@ const REQUIRED_MESSAGES = {
   procurementType: "Procurement type is required.",
   supplier: "Preferred vendor is required.",
 };
-const initialMaterials = loadMaterials();
 
 export default function Products() {
-  const [materials, setMaterials] = useState(initialMaterials);
-  const [selectedId, setSelectedId] = useState(initialMaterials[0]?.materialNumber ?? null);
-  const [draft, setDraft] = useState(() =>
-    initialMaterials[0] ? cloneMaterial(initialMaterials[0]) : createNewMaterial(initialMaterials)
-  );
+  const [materials, setMaterials] = useState([]);
+  const [selectedId, setSelectedId] = useState(null);
+  const [draft, setDraft] = useState(() => createMaterialDraft());
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
   const [errors, setErrors] = useState({});
   const [isDirty, setIsDirty] = useState(false);
   const [toastState, setToastState] = useState({ open: false, variant: "success", title: "", message: "" });
 
+  const fetchMaterials = useCallback(
+    async (preferredId = null) => {
+      try {
+        const data = await getMaterials();
+        setMaterials(data);
+        if (preferredId) {
+          setSelectedId(preferredId);
+          return;
+        }
+        if (data.length === 0) {
+          setSelectedId(null);
+          return;
+        }
+        setSelectedId((prev) => {
+          if (prev && data.some((material) => material.materialNumber === prev)) {
+            return prev;
+          }
+          return data[0].materialNumber;
+        });
+      } catch (error) {
+        console.error("Failed to load materials", error);
+      }
+    },
+    []
+  );
+
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(materials));
-    } catch {}
-  }, [materials]);
+    fetchMaterials();
+  }, [fetchMaterials]);
 
   useEffect(() => {
     if (!selectedId) {
-      setDraft(createNewMaterial(materials));
+      setDraft(createMaterialDraft());
       setErrors({});
       setIsDirty(false);
       return;
@@ -240,7 +117,7 @@ export default function Products() {
     setToastState({ open: true, variant, title, message });
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const validation = validateMaterial(draft, materials, selectedId);
     if (Object.keys(validation).length) {
       setErrors(validation);
@@ -250,26 +127,28 @@ export default function Products() {
 
     const payload = {
       ...draft,
-      materialNumber: draft.materialNumber.trim().toUpperCase(),
-      description: draft.description.trim(),
+      materialNumber: (draft.materialNumber || "").trim().toUpperCase(),
+      description: (draft.description || "").trim(),
       lastReviewed: new Date().toISOString().slice(0, 10),
       createdOn: draft.createdOn || new Date().toISOString(),
     };
 
-    if (selectedId) {
-      setMaterials((prev) =>
-        prev.map((material) => (material.materialNumber === selectedId ? payload : material))
+    const wasUpdate = Boolean(selectedId);
+    try {
+      const saved = await upsertMaterial(payload);
+      await fetchMaterials(saved.materialNumber);
+      setDraft(cloneMaterial(saved));
+      setErrors({});
+      setIsDirty(false);
+      showToast(
+        "success",
+        wasUpdate ? "Material Updated" : "Material Created",
+        `${saved.materialNumber} saved.`
       );
-      setSelectedId(payload.materialNumber);
-      showToast("success", "Material Updated", `${payload.materialNumber} saved.`);
-    } else {
-      setMaterials((prev) => [...prev, payload]);
-      setSelectedId(payload.materialNumber);
-      showToast("success", "Material Created", `${payload.materialNumber} added to the master.`);
+    } catch (error) {
+      console.error("Failed to save material", error);
+      showToast("error", "Save Failed", error.message || "Unable to save material right now.");
     }
-
-    setErrors({});
-    setIsDirty(false);
   };
 
   const handleReset = () => {
@@ -279,7 +158,7 @@ export default function Products() {
         setDraft(cloneMaterial(existing));
       }
     } else {
-      setDraft(createNewMaterial(materials));
+      setDraft(createMaterialDraft());
     }
     setErrors({});
     setIsDirty(false);
@@ -287,7 +166,7 @@ export default function Products() {
 
   const handleNewMaterial = () => {
     setSelectedId(null);
-    setDraft(createNewMaterial(materials));
+    setDraft(createMaterialDraft());
     setErrors({});
     setIsDirty(false);
   };
@@ -296,13 +175,14 @@ export default function Products() {
     if (!selectedId) return;
     const existing = materials.find((mat) => mat.materialNumber === selectedId);
     if (!existing) return;
+    const baseDraft = createMaterialDraft();
     const duplicate = {
       ...cloneMaterial(existing),
-      materialNumber: generateMaterialNumber(materials),
+      materialNumber: baseDraft.materialNumber,
       description: `${existing.description} Copy`,
       status: "Active",
-      createdOn: new Date().toISOString(),
-      lastReviewed: new Date().toISOString().slice(0, 10),
+      createdOn: baseDraft.createdOn,
+      lastReviewed: baseDraft.lastReviewed,
     };
     setSelectedId(null);
     setDraft(duplicate);
@@ -379,42 +259,8 @@ function MaterialSummary({ metrics }) {
   );
 }
 
-function loadMaterials() {
-  if (typeof window === "undefined") {
-    return DEFAULT_MATERIALS;
-  }
-  try {
-    const cached = localStorage.getItem(STORAGE_KEY);
-    if (cached) {
-      const parsed = JSON.parse(cached);
-      if (Array.isArray(parsed) && parsed.length) {
-        return parsed;
-      }
-    }
-  } catch {}
-  return DEFAULT_MATERIALS;
-}
-
 function cloneMaterial(material) {
   return JSON.parse(JSON.stringify(material));
-}
-
-function generateMaterialNumber(records = []) {
-  const highest = records.reduce((max, item) => {
-    const digits = Number(String(item.materialNumber || "").replace(/\D/g, "") || 0);
-    return Math.max(max, digits);
-  }, 0);
-  const next = highest + 1;
-  return `MAT-${String(next).padStart(4, "0")}`;
-}
-
-function createNewMaterial(records = []) {
-  return {
-    ...MATERIAL_TEMPLATE,
-    materialNumber: generateMaterialNumber(records),
-    createdOn: new Date().toISOString(),
-    lastReviewed: new Date().toISOString().slice(0, 10),
-  };
 }
 
 function validateMaterial(material, records, currentId) {

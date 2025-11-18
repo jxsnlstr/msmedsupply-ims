@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import LogoUrl from "../assets/medsupply.png";
 import ClearFilterIcon from "../assets/Clear Filter.png";
 import FilterModal from "../components/common/FilterModal";
@@ -6,6 +6,7 @@ import EditProductModal from "../components/common/EditProductModal";
 import InventoryMetricGrid from "../components/inventory/InventoryMetricGrid";
 import InventoryTable from "../components/inventory/InventoryTable";
 import InventoryAddProductModal from "../components/inventory/InventoryAddProductModal";
+import { getStockByLocation, getStockEntryMetadata, upsertStockItem } from "../api/imsApi";
 
 export default function Inventory() {
   const [showAddModal, setShowAddModal] = useState(false);
@@ -27,77 +28,22 @@ export default function Inventory() {
     setFilters((prev) => ({ ...prev, [field]: value }));
   };
 
-  const defaultProducts = [
-    { id: "P001", name: "Maggi", category: "Food", price: 4.3, quantity: 43, threshold: "12 Packs", location: "", expiry: "2025-11-12", availability: "In Stock" },
-    { id: "P002", name: "Bru", category: "Beverages", price: 2.57, quantity: 22, threshold: "12 Packs", location: "", expiry: "2025-12-21", availability: "Out of Stock" },
-    { id: "P003", name: "Red Bull", category: "Beverages", price: 4.05, quantity: 36, threshold: "9 Packs", location: "", expiry: "2025-05-12", availability: "In Stock" },
-    { id: "P004", name: "Bourn Vita", category: "Health", price: 5.02, quantity: 14, threshold: "6 Packs", location: "", expiry: "2025-08-12", availability: "Out of Stock" },
-    { id: "P005", name: "Horlicks", category: "Health", price: 5.3, quantity: 5, threshold: "5 Packs", location: "", expiry: "2025-09-01", availability: "In Stock" },
-    { id: "P006", name: "Harpic", category: "Cleaning", price: 6.05, quantity: 10, threshold: "5 Packs", location: "", expiry: "2025-09-01", availability: "In Stock" },
-    { id: "P007", name: "Ariel", category: "Cleaning", price: 4.08, quantity: 23, threshold: "7 Packs", location: "", expiry: "2025-12-15", availability: "Out of Stock" },
-    { id: "P008", name: "Scotch Brite", category: "Cleaning", price: 3.59, quantity: 43, threshold: "8 Packs", location: "", expiry: "2025-06-06", availability: "In Stock" },
-    { id: "P009", name: "Coca Cola", category: "Beverages", price: 2.05, quantity: 41, threshold: "10 Packs", location: "", expiry: "2025-11-11", availability: "Low Stock" },
-  ];
+  const [products, setProducts] = useState([]);
+  const [entryMap, setEntryMap] = useState({});
 
-  const [products, setProducts] = useState(() => {
+  const refreshInventory = useCallback(async () => {
     try {
-      const saved = localStorage.getItem("inventory_products");
-      return saved ? JSON.parse(saved) : defaultProducts;
-    } catch {
-      return defaultProducts;
+      const [items, metadata] = await Promise.all([getStockByLocation(), getStockEntryMetadata()]);
+      setProducts(items);
+      setEntryMap(metadata || {});
+    } catch (error) {
+      console.error("Failed to load inventory data", error);
     }
-  });
+  }, []);
 
   useEffect(() => {
-    try {
-      localStorage.setItem("inventory_products", JSON.stringify(products));
-    } catch {}
-  }, [products]);
-
-  // Map to hold per-entry metadata for Inventory view (batch/user/entry date)
-  const [entryMap, setEntryMap] = useState(() => {
-    try {
-      const saved = localStorage.getItem("inventory_entry_map");
-      if (saved) return JSON.parse(saved);
-    } catch {}
-    const map = {};
-    (Array.isArray(products) ? products : []).forEach((p) => {
-      const key = `${p.id}::${p.name}`;
-      map[key] = {
-        batch:
-          `BATCH-${String(p.id || "").replace(/[^A-Za-z0-9]/g, "").slice(-6) || "000000"}`,
-        user: "System",
-        entryAt: new Date().toISOString(),
-      };
-    });
-    return map;
-  });
-
-  // Persist entry map
-  useEffect(() => {
-    try {
-      localStorage.setItem("inventory_entry_map", JSON.stringify(entryMap));
-    } catch {}
-  }, [entryMap]);
-
-  // Ensure all products have an entry in the map
-  useEffect(() => {
-    setEntryMap((prev) => {
-      const next = { ...prev };
-      (Array.isArray(products) ? products : []).forEach((p) => {
-        const key = `${p.id}::${p.name}`;
-        if (!next[key]) {
-          next[key] = {
-            batch:
-              `BATCH-${String(p.id || "").replace(/[^A-Za-z0-9]/g, "").slice(-6) || "000000"}`,
-            user: "System",
-            entryAt: new Date().toISOString(),
-          };
-        }
-      });
-      return next;
-    });
-  }, [products]);
+    refreshInventory();
+  }, [refreshInventory]);
 
   const [newProduct, setNewProduct] = useState({
     name: "",
@@ -131,46 +77,57 @@ export default function Inventory() {
     }
   };
 
+  const formatThreshold = (value, unit) => `${value || 0} ${unit || ""}`.trim();
+
   // Add or merge product
-  const handleAddProduct = () => {
+  const handleAddProduct = async () => {
     if (!newProduct.name || !newProduct.id || !newProduct.price || !newProduct.quantity) {
       alert("Please fill in all required fields.");
       return;
     }
 
     const existing = products.find(
-      (p) => p.name.toLowerCase() === newProduct.name.toLowerCase()
+      (p) => (p.name || "").toLowerCase() === newProduct.name.toLowerCase()
     );
+    const quantityToAdd = parseInt(newProduct.quantity, 10);
+    const baseThreshold = formatThreshold(newProduct.threshold, newProduct.unit);
 
-    if (existing) {
-      const updated = products.map((p) => {
-        if (p.name.toLowerCase() === newProduct.name.toLowerCase()) {
-          const newQty = parseInt(p.quantity) + parseInt(newProduct.quantity);
-          const updatedAvailability =
-            newQty <= 0 ? "Out of Stock" : newQty < 10 ? "Low Stock" : "In Stock";
-          return { ...p, quantity: newQty, availability: updatedAvailability };
+    const availability = (qty, thresholdText) => {
+      if (qty <= 0) return "Out of Stock";
+      const numericThreshold = Number((thresholdText || "").split(" ")[0]) || 0;
+      if (numericThreshold && qty < numericThreshold) return "Low Stock";
+      if (!numericThreshold && qty < 10) return "Low Stock";
+      return "In Stock";
+    };
+
+    const payload = existing
+      ? {
+          ...existing,
+          quantity: Number(existing.quantity || 0) + quantityToAdd,
+          availability: availability(
+            Number(existing.quantity || 0) + quantityToAdd,
+            existing.threshold
+          ),
         }
-        return p;
-      });
-      setProducts(updated);
-    } else {
-      const newItem = {
-        id: newProduct.id,
-        name: newProduct.name,
-        category: newProduct.category || "Uncategorized",
-        price: parseFloat(newProduct.price),
-        quantity: parseInt(newProduct.quantity),
-        threshold: `${newProduct.threshold || 0} ${newProduct.unit || ""}`.trim(),
-        location: newProduct.location || "",
-        expiry: newProduct.expiry,
-        availability:
-          parseInt(newProduct.quantity) <= 0
-            ? "Out of Stock"
-            : parseInt(newProduct.quantity) < 10
-            ? "Low Stock"
-            : "In Stock",
-      };
-      setProducts((prev) => [...prev, newItem]);
+      : {
+          id: newProduct.id,
+          name: newProduct.name,
+          category: newProduct.category || "Uncategorized",
+          price: parseFloat(newProduct.price),
+          quantity: quantityToAdd,
+          threshold: baseThreshold,
+          location: newProduct.location || "",
+          expiry: newProduct.expiry,
+          availability: availability(quantityToAdd, baseThreshold),
+        };
+
+    try {
+      await upsertStockItem(payload);
+      await refreshInventory();
+    } catch (error) {
+      console.error("Failed to save inventory item", error);
+      alert("Unable to save this product right now.");
+      return;
     }
 
     setShowAddModal(false);
@@ -213,7 +170,7 @@ export default function Inventory() {
     setShowEditModal(true);
   };
 
-  const handleUpdateProduct = () => {
+  const handleUpdateProduct = async () => {
     if (!newProduct.name || !newProduct.id || !newProduct.price || !newProduct.quantity) {
       alert("Please fill in all required fields.");
       return;
@@ -234,30 +191,41 @@ export default function Inventory() {
           ? "Low Stock"
           : "In Stock",
     };
-    if (applyToAll && editNameKey) {
-      setProducts((prev) =>
-        prev.map((p, i) => {
-          if ((p.name || "").toLowerCase() === editNameKey) {
-            const newThreshold = `${newProduct.threshold || 0} ${newProduct.unit || ""}`.trim();
-            const availability = (qty) => (qty <= 0 ? "Out of Stock" : qty < 10 ? "Low Stock" : "In Stock");
-            return {
-              ...p,
-              // keep id and quantity for each instance; update rest
+    const availability = (qty) =>
+      qty <= 0 ? "Out of Stock" : qty < 10 ? "Low Stock" : "In Stock";
+
+    try {
+      if (applyToAll && editNameKey) {
+        const matches = products.filter(
+          (p) => (p.name || "").toLowerCase() === editNameKey
+        );
+        await Promise.all(
+          matches.map((match) =>
+            upsertStockItem({
+              ...match,
               name: newProduct.name,
               category: newProduct.category || "Uncategorized",
               price: parseFloat(newProduct.price),
-              threshold: newThreshold,
-              location: newProduct.location || p.location,
-              expiry: newProduct.expiry || p.expiry,
-              availability: availability(parseInt(p.quantity)),
-            };
-          }
-          return p;
-        })
-      );
-    } else {
-      setProducts((prev) => prev.map((p, i) => (i === editIndex ? updatedItem : p)));
+              threshold: `${newProduct.threshold || 0} ${newProduct.unit || ""}`.trim(),
+              location: newProduct.location || match.location,
+              expiry: newProduct.expiry || match.expiry,
+              availability: availability(Number(match.quantity)),
+            })
+          )
+        );
+      } else if (editIndex !== null && products[editIndex]) {
+        await upsertStockItem({
+          ...products[editIndex],
+          ...updatedItem,
+        });
+      }
+      await refreshInventory();
+    } catch (error) {
+      console.error("Failed to update product", error);
+      alert("Unable to update this product right now.");
+      return;
     }
+
     setShowEditModal(false);
     setEditIndex(null);
     setEditNameKey(null);

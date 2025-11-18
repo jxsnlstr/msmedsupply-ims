@@ -1,6 +1,15 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import CenteredToast from "../components/common/CenteredToast";
 import ProductModal from "../components/receiving/ProductModal";
+import {
+  deleteStockEntryMetadata,
+  deleteStockItem,
+  getStockByLocation,
+  getStockEntryMetadata,
+  queuePendingTransfer,
+  recordMovement,
+  upsertStockItem,
+} from "../api/imsApi";
 
 export default function Receiving() {
   const [showReceiveModal, setShowReceiveModal] = useState(false);
@@ -21,24 +30,22 @@ export default function Receiving() {
     errorTimerRef.current = setTimeout(() => setErrorToast(false), 2000);
   };
 
-  // Load products from Products tab (localStorage)
   const [products, setProducts] = useState([]);
-  useEffect(() => {
-    const load = () => {
-      try {
-        const raw = localStorage.getItem("inventory_products");
-        setProducts(raw ? JSON.parse(raw) : []);
-      } catch {
-        setProducts([]);
-      }
-    };
-    load();
-    const onStorage = (e) => {
-      if (e.key === "inventory_products") load();
-    };
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
+  const [entryMap, setEntryMap] = useState({});
+
+  const refreshInventory = useCallback(async () => {
+    try {
+      const [items, metadata] = await Promise.all([getStockByLocation(), getStockEntryMetadata()]);
+      setProducts(items);
+      setEntryMap(metadata || {});
+    } catch (error) {
+      console.error("Failed to load inventory data", error);
+    }
   }, []);
+
+  useEffect(() => {
+    refreshInventory();
+  }, [refreshInventory]);
 
   const [receiveItem, setReceiveItem] = useState({
     name: "",
@@ -130,24 +137,19 @@ export default function Receiving() {
       price: p.price != null ? String(p.price) : prev.price || "",
       unit: p.unit || prev.unit || "",
       batch: (() => {
-        try {
-          const entryRaw = localStorage.getItem("inventory_entry_map");
-          const entryMap = entryRaw ? JSON.parse(entryRaw) : {};
-          const key = `${p.id}::${p.name}`;
-          if (entryMap && entryMap[key] && entryMap[key].batch) {
-            return String(entryMap[key].batch);
-          }
-          return prev.batch || "";
-        } catch {
-          return prev.batch || "";
+        const key = `${p.id}::${p.name}`;
+        const meta = entryMap && entryMap[key];
+        if (meta?.batch) {
+          return String(meta.batch);
         }
+        return prev.batch || "";
       })(),
     }));
     setShowRemoveSuggestions(false);
     setRemoveErrors({});
   };
 
-  const handleSaveReceive = () => {
+  const handleSaveReceive = async () => {
     // Validate against existing products and required fields
     const name = (receiveItem.name || "").trim();
     const id = (receiveItem.id || "").trim();
@@ -170,43 +172,37 @@ export default function Receiving() {
     }
 
     try {
-      const payload = {
+      const timestamp = new Date().toISOString();
+      await queuePendingTransfer({
         id: product.id || receiveItem.id || "",
         name: product.name || receiveItem.name || "",
         category: product.category || receiveItem.category || "",
         batch: receiveItem.batch || "",
-        price: receiveItem.price ? Number(receiveItem.price) : (product.price ?? null),
+        price: receiveItem.price ? Number(receiveItem.price) : product.price ?? null,
         quantity: qty,
         unit: receiveItem.unit || "",
         expiry: receiveItem.expiry || product.expiry || "",
-        createdAt: new Date().toISOString(),
+        createdAt: timestamp,
         source: "receiving",
         status: "pending_transfer",
-      };
-      const raw = localStorage.getItem("stock_to_transfer");
-      const list = raw ? JSON.parse(raw) : [];
-      list.push(payload);
-      localStorage.setItem("stock_to_transfer", JSON.stringify(list));
-
-      // Append to movement history
-      try {
-        const historyRaw = localStorage.getItem("stock_movement_history");
-        const history = historyRaw ? JSON.parse(historyRaw) : [];
-        history.push({
-          action: "Receive",
-          createdAt: payload.createdAt,
-          id: payload.id,
-          name: payload.name,
-          category: payload.category,
-          batch: payload.batch,
-          quantity: payload.quantity,
-          unit: payload.unit,
-          expiry: payload.expiry || "",
-          user: "System",
-        });
-        localStorage.setItem("stock_movement_history", JSON.stringify(history));
-      } catch {}
-    } catch {}
+      });
+      await recordMovement({
+        id: product.id || receiveItem.id || "",
+        name: product.name || receiveItem.name || "",
+        category: product.category || receiveItem.category || "",
+        batch: receiveItem.batch || "",
+        quantity: qty,
+        unit: receiveItem.unit || "",
+        action: "Receive",
+        createdAt: timestamp,
+        user: "System",
+        expiry: receiveItem.expiry || product.expiry || "",
+      });
+    } catch (error) {
+      console.error("Failed to queue transfer", error);
+      showError("Unable to queue this receipt right now.");
+      return;
+    }
     setShowReceiveModal(false);
     // Show professional success toast in center of screen
     try {
@@ -227,7 +223,7 @@ export default function Receiving() {
     });
   };
 
-  const handleSaveRemove = () => {
+  const handleSaveRemove = async () => {
     const errors = {};
     const name = (removeItem.name || "").trim();
     const id = (removeItem.id || "").trim();
@@ -248,23 +244,14 @@ export default function Receiving() {
     }
 
     if (product) {
-      try {
-        const entryRaw = localStorage.getItem("inventory_entry_map");
-        const entryMap = entryRaw ? JSON.parse(entryRaw) : {};
-        const key = `${product.id}::${product.name}`;
-        const meta = entryMap && entryMap[key];
-        const expectedBatch = (meta && meta.batch) ? String(meta.batch).trim() : "";
-        const inputBatch = String(removeItem.batch || "").trim();
-        if (!inputBatch) {
-          errors.batch = "Enter batch to remove.";
-        } else if (expectedBatch && expectedBatch !== inputBatch) {
-          errors.batch = `Batch must match inventory record (${expectedBatch}).`;
-        }
-      } catch {
-        const inputBatch = String(removeItem.batch || "").trim();
-        if (!inputBatch) {
-          errors.batch = "Enter batch to remove.";
-        }
+      const key = `${product.id}::${product.name}`;
+      const meta = entryMap && entryMap[key];
+      const expectedBatch = meta?.batch ? String(meta.batch).trim() : "";
+      const inputBatch = String(removeItem.batch || "").trim();
+      if (!inputBatch) {
+        errors.batch = "Enter batch to remove.";
+      } else if (expectedBatch && expectedBatch !== inputBatch) {
+        errors.batch = `Batch must match inventory record (${expectedBatch}).`;
       }
     }
 
@@ -284,35 +271,19 @@ export default function Receiving() {
 
     setRemoveErrors({});
 
-    // Persist removal
     try {
       const newQty = Math.max(0, Number(product.quantity || 0) - qty);
-      let nextProducts = [...products];
+      const key = `${product.id}::${product.name}`;
       if (newQty === 0) {
-        nextProducts = nextProducts.filter((_, index) => index !== prodIndex);
-        try {
-          const entryRaw = localStorage.getItem("inventory_entry_map");
-          const entryMap = entryRaw ? JSON.parse(entryRaw) : {};
-          const key = `${product.id}::${product.name}`;
-          if (entryMap && entryMap[key]) {
-            delete entryMap[key];
-            localStorage.setItem("inventory_entry_map", JSON.stringify(entryMap));
-          }
-        } catch {}
+        await deleteStockItem(product.id);
+        await deleteStockEntryMetadata(key);
       } else {
-        const parts = String(product.threshold || "").trim().split(" ");
-        const tVal = Number(parts.shift() || 0);
-        const availability = newQty <= 0 ? "Out of Stock" : newQty < tVal ? "Low Stock" : "In Stock";
-        nextProducts[prodIndex] = { ...product, quantity: newQty, availability };
+        await upsertStockItem({
+          ...product,
+          quantity: newQty,
+        });
       }
-      localStorage.setItem("inventory_products", JSON.stringify(nextProducts));
-      setProducts(nextProducts);
-    } catch {}
-
-    try {
-      const historyRaw = localStorage.getItem("stock_movement_history");
-      const history = historyRaw ? JSON.parse(historyRaw) : [];
-      history.push({
+      await recordMovement({
         action: "Remove",
         createdAt: new Date().toISOString(),
         id: product.id,
@@ -324,8 +295,12 @@ export default function Receiving() {
         expiry: product.expiry || "",
         user: "System",
       });
-      localStorage.setItem("stock_movement_history", JSON.stringify(history));
-    } catch {}
+      await refreshInventory();
+    } catch (error) {
+      console.error("Failed to remove goods", error);
+      showError("Unable to remove goods right now.");
+      return;
+    }
 
     setShowRemoveModal(false);
     try {

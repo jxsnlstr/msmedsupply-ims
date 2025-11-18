@@ -1,45 +1,38 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import LogoUrl from "../assets/medsupply.png";
 import MovementHistoryTable from "../components/stockMovement/MovementHistoryTable";
 import PendingTransferTable from "../components/stockMovement/PendingTransferTable";
 import PlaceholderCard from "../components/stockMovement/PlaceholderCard";
+import { getPendingTransfers, getStockMovements } from "../api/imsApi";
 
 export default function StockMovement() {
   const [toTransfer, setToTransfer] = useState([]);
   const [history, setHistory] = useState([]);
 
-  const loadToTransfer = () => {
+  const loadPendingTransfers = useCallback(async () => {
     try {
-      const raw = localStorage.getItem("stock_to_transfer");
-      const arr = raw ? JSON.parse(raw) : [];
-      setToTransfer(Array.isArray(arr) ? arr : []);
-    } catch {
+      const data = await getPendingTransfers();
+      setToTransfer(data);
+    } catch (error) {
+      console.error("Failed to load pending transfers", error);
       setToTransfer([]);
     }
-  };
+  }, []);
 
-  useEffect(() => {
-    loadToTransfer();
+  const loadMovementHistory = useCallback(async () => {
     try {
-      const raw = localStorage.getItem("stock_movement_history");
-      setHistory(raw ? JSON.parse(raw) : []);
-    } catch {
+      const data = await getStockMovements();
+      setHistory(data);
+    } catch (error) {
+      console.error("Failed to load movement history", error);
       setHistory([]);
     }
-    const onStorage = (e) => {
-      if (e.key === "stock_to_transfer") loadToTransfer();
-      if (e.key === "stock_movement_history") {
-        try {
-          const raw = localStorage.getItem("stock_movement_history");
-          setHistory(raw ? JSON.parse(raw) : []);
-        } catch {
-          setHistory([]);
-        }
-      }
-    };
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
   }, []);
+
+  useEffect(() => {
+    loadPendingTransfers();
+    loadMovementHistory();
+  }, [loadPendingTransfers, loadMovementHistory]);
 
   const sortedHistory = useMemo(() => {
     try {
@@ -170,14 +163,7 @@ export default function StockMovement() {
     }
   };
 
-  const refreshHistory = () => {
-    try {
-      const raw = localStorage.getItem("stock_movement_history");
-      setHistory(raw ? JSON.parse(raw) : []);
-    } catch {
-      setHistory([]);
-    }
-  };
+  const refreshHistory = loadMovementHistory;
 
   return (
     <div className="space-y-6">
@@ -192,7 +178,7 @@ export default function StockMovement() {
         items={toTransfer}
         title="Stock to be Transferred"
         subtitle="Receiving entries waiting for warehouse processing."
-        onRefresh={loadToTransfer}
+        onRefresh={loadPendingTransfers}
       />
 
       <PlaceholderCard

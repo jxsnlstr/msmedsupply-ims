@@ -2,7 +2,8 @@ import React from "react";
 import SearchIcon from "../assets/Search.png";
 import NotificationIcon from "../assets/Notification.png";
 
-export default function Topbar() {
+export default function Topbar({ currentUser }) {
+  const displayName = currentUser?.displayName || currentUser?.email || "User";
   return (
     <header className="w-full h-16 bg-white border-b border-gray-200 flex items-center justify-between px-6 sticky top-0 z-30 transition-colors duration-200 ease-out dark:bg-gray-900 dark:border-gray-700">
       {/* Search */}
@@ -32,7 +33,7 @@ export default function Topbar() {
             alt="User"
             className="w-7 h-7 rounded-full border border-gray-300 dark:border-gray-600"
           />
-          <span className="text-sm font-medium text-gray-700 dark:text-gray-200">Admin</span>
+          <span className="text-sm font-medium text-gray-700 dark:text-gray-200">{displayName}</span>
         </div>
       </div>
     </header>
